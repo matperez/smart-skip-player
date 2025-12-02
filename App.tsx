@@ -21,8 +21,6 @@ const App: React.FC = () => {
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      // Removed the 25MB limit check here as we now support large files via Files API
-      
       const url = URL.createObjectURL(file);
       setVideoFile({ file, previewUrl: url });
       setAnalysisStatus(AnalysisStatus.IDLE);
@@ -45,41 +43,54 @@ const App: React.FC = () => {
 
         // 1. Resolve YouTube URL if necessary
         if (isYT) {
-            setDownloadStatus('Resolving YouTube stream (via Cobalt)...');
+            setDownloadStatus('Resolving YouTube stream...');
             fetchUrl = await resolveYoutubeUrl(urlInput);
         }
 
-        // 2. Fetch the video data (using Proxy for CORS if needed)
+        // 2. Fetch the video data with robust fallback
         setDownloadStatus(isYT ? 'Downloading video data (via Proxy)...' : 'Downloading video...');
         
-        // Use a CORS proxy for YouTube streams or if the direct fetch fails
-        // Note: Using corsproxy.io for demo purposes
-        const proxyUrl = isYT 
-            ? `https://corsproxy.io/?${encodeURIComponent(fetchUrl)}` 
-            : fetchUrl;
+        // Strategy: Try multiple proxy services if the first fails
+        const proxyStrategies = [
+            (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+            (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+            (u: string) => `https://thingproxy.freeboard.io/fetch/${u}`,
+        ];
 
-        let response;
-        try {
-            response = await fetch(proxyUrl);
-        } catch (fetchErr) {
-            // If direct fetch fails (and not YT), try proxy as fallback
-            if (!isYT) {
-                setDownloadStatus('Direct fetch failed, trying proxy...');
-                response = await fetch(`https://corsproxy.io/?${encodeURIComponent(fetchUrl)}`);
-            } else {
-                throw fetchErr;
+        let blob: Blob | null = null;
+        let lastError;
+
+        // Try proxies first (needed for most external video links due to CORS)
+        for (const createProxy of proxyStrategies) {
+            try {
+                const proxyUrl = isYT ? createProxy(fetchUrl) : fetchUrl; 
+                // Note: If not YT, we try direct first usually, but for this loop we can assume proxy needed for external URL
+                // Let's adjust: if not YT, try direct first, then proxies.
+                
+                if (!isYT && createProxy === proxyStrategies[0]) {
+                     try {
+                         const res = await fetch(fetchUrl);
+                         if (res.ok) {
+                             blob = await res.blob();
+                             break;
+                         }
+                     } catch(e) {}
+                }
+
+                const res = await fetch(createProxy(fetchUrl));
+                if (!res.ok) throw new Error(`Status ${res.status}`);
+                blob = await res.blob();
+                break; // Success
+            } catch (err) {
+                lastError = err;
+                continue;
             }
         }
 
-        if (!response || !response.ok) {
-            throw new Error(`Failed to download video: ${response?.status || 'Network Error'}`);
+        if (!blob) {
+            throw new Error(`Failed to download video. ${lastError?.message || ''}`);
         }
         
-        const blob = await response.blob();
-        
-        // Removed explicit 25MB check here. 
-        // We will let the Gemini Service handle large files via the Files API.
-
         // Create a File object from the blob
         const fileName = isYT ? 'youtube_video.mp4' : (urlInput.split('/').pop()?.split('?')[0] || 'video.mp4');
         const file = new File([blob], fileName, { type: blob.type || 'video/mp4' });
