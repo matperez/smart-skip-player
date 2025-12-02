@@ -82,8 +82,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, skipSegments, isAnalyzin
     if (videoRef.current) {
       videoRef.current.playbackRate = speed;
     }
-    // If setting to high speed, suggest or auto-enable smart skip? 
-    // For now, keep them independent but accessible.
   };
 
   // Toggle Smart Skip
@@ -91,12 +89,24 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, skipSegments, isAnalyzin
     setSmartSkipEnabled(!smartSkipEnabled);
   };
 
-  // Activate "Smart x2"
-  const activateSmartTurbo = () => {
-    setPlaybackRate(2.0);
-    setSmartSkipEnabled(true);
-    if(videoRef.current) videoRef.current.playbackRate = 2.0;
+  // Toggle "Smart x2" (Turbo Mode)
+  const toggleSmartTurbo = () => {
+    const isTurbo = playbackRate === 2.0 && smartSkipEnabled;
+    if (isTurbo) {
+        // Revert to standard 1x
+        setPlaybackRate(1.0);
+        setSmartSkipEnabled(false);
+        if(videoRef.current) videoRef.current.playbackRate = 1.0;
+    } else {
+        // Activate Turbo
+        setPlaybackRate(2.0);
+        setSmartSkipEnabled(true);
+        if(videoRef.current) videoRef.current.playbackRate = 2.0;
+    }
   };
+
+  // Helper to check if Turbo is effectively active
+  const isTurboActive = playbackRate === 2.0 && smartSkipEnabled;
 
   // Format time helper
   const formatTime = (time: number) => {
@@ -177,7 +187,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, skipSegments, isAnalyzin
         </div>
 
         {/* Bottom Controls */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 sm:gap-0">
             <div className="flex items-center gap-4">
                 {/* Play/Pause */}
                 <button onClick={togglePlay} className="text-white hover:text-primary-400 transition-colors">
@@ -185,66 +195,67 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, skipSegments, isAnalyzin
                 </button>
                 
                 {/* Time Display */}
-                <div className="text-sm font-mono text-gray-400">
+                <div className="text-sm font-mono text-gray-400 whitespace-nowrap">
                     {formatTime(currentTime)} / {formatTime(duration)}
                 </div>
             </div>
 
             <div className="flex items-center gap-3">
                 
-                {/* Regular Speed Dropdown */}
-                <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1">
-                    <button 
-                        onClick={() => changeSpeed(1.0)} 
-                        className={`px-2 py-1 text-xs rounded-md transition-colors ${playbackRate === 1.0 && !smartSkipEnabled ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                    >
-                        1x
-                    </button>
-                    <button 
-                        onClick={() => changeSpeed(1.5)} 
-                        className={`px-2 py-1 text-xs rounded-md transition-colors ${playbackRate === 1.5 && !smartSkipEnabled ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                    >
-                        1.5x
-                    </button>
-                    <button 
-                        onClick={() => changeSpeed(2.0)} 
-                        className={`px-2 py-1 text-xs rounded-md transition-colors ${playbackRate === 2.0 && !smartSkipEnabled ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                    >
-                        2x
-                    </button>
+                {/* Standard Speed Dropdown */}
+                <div className="flex items-center bg-gray-800 rounded-lg p-1">
+                    {[1.0, 1.5, 2.0].map(speed => (
+                       <button 
+                          key={speed}
+                          onClick={() => changeSpeed(speed)} 
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                            playbackRate === speed 
+                              ? 'bg-gray-600 text-white shadow-sm' 
+                              : 'text-gray-400 hover:text-white'
+                          }`}
+                        >
+                          {speed}x
+                        </button>
+                    ))}
                 </div>
 
-                {/* Divider */}
-                <div className="h-6 w-px bg-gray-700 mx-1"></div>
+                <div className="h-8 w-px bg-gray-700 mx-1 hidden sm:block"></div>
 
-                {/* Smart Controls */}
-                <div className="flex items-center gap-2">
-                    {/* Just Smart Skip Toggle */}
+                {/* Smart Controls Group */}
+                <div className="flex items-center gap-2 sm:gap-3">
+                    {/* Skip Filler Toggle */}
                     <button
                         onClick={toggleSmartSkip}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
-                            smartSkipEnabled && playbackRate < 2.0
-                                ? 'bg-purple-600/20 border-purple-500 text-purple-300' 
+                            smartSkipEnabled
+                                ? 'bg-purple-500/20 border-purple-500 text-purple-300' 
                                 : 'bg-transparent border-gray-700 text-gray-400 hover:border-gray-500'
                         }`}
                         title="Skip silence and filler without speeding up"
                     >
                         <BrainCircuitIcon className="w-4 h-4" />
-                        <span className="text-xs font-semibold">Smart Skip</span>
+                        <div className="flex flex-col items-start leading-none">
+                            <span className="text-xs font-bold">Skip Filler</span>
+                            <span className="text-[10px] opacity-70">Silence & Pauses</span>
+                        </div>
                     </button>
 
-                    {/* SMART TURBO (The "x2" request) */}
+                    {/* Smart Turbo (x2 + Skip) */}
                     <button
-                        onClick={activateSmartTurbo}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
-                             smartSkipEnabled && playbackRate === 2.0
-                                ? 'bg-gradient-to-r from-blue-600 to-purple-600 border-transparent text-white shadow-lg shadow-purple-900/50' 
-                                : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                        onClick={toggleSmartTurbo}
+                        className={`relative overflow-hidden flex items-center gap-2 px-4 py-1.5 rounded-lg border transition-all group ${
+                             isTurboActive
+                                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 border-transparent text-white shadow-lg shadow-blue-900/40' 
+                                : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-750'
                         }`}
                         title="2x Speed + Auto-skip fluff"
                     >
-                        <SparklesIcon className="w-4 h-4" />
-                        <span className="text-xs font-bold">Smart x2</span>
+                        <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                        <SparklesIcon className="w-4 h-4 relative z-10" />
+                        <div className="flex flex-col items-start leading-none relative z-10">
+                            <span className="text-xs font-bold">Smart x2</span>
+                            <span className="text-[10px] opacity-80">Speed + Skip</span>
+                        </div>
                     </button>
                 </div>
             </div>
