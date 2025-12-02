@@ -1,0 +1,5 @@
+{
+  "name": "SmartSkip Player",
+  "description": "An intelligent video player that uses Gemini AI to analyze content and automatically skip insignificant moments, filler words, and silence during playback.",
+  "requestFramePermissions": []
+}
