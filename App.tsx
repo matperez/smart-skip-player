@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import VideoPlayer from './components/VideoPlayer';
 import { analyzeVideoContent } from './services/geminiService';
+import { isYoutubeUrl, resolveYoutubeUrl } from './services/youtubeService';
 import { AnalysisStatus, AnalysisResult, VideoFile } from './types';
 import { UploadIcon, BrainCircuitIcon, XIcon, LinkIcon, YoutubeIcon } from './components/Icons';
 
@@ -9,19 +10,18 @@ const App: React.FC = () => {
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progressMessage, setProgressMessage] = useState<string>('');
 
   // New states for URL handling
   const [activeTab, setActiveTab] = useState<'upload' | 'url'>('upload');
   const [urlInput, setUrlInput] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<string>('');
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (file.size > 25 * 1024 * 1024) {
-        setError("For this demo, please use files under 25MB due to browser constraints.");
-        return;
-      }
+      // Removed the 25MB limit check here as we now support large files via Files API
       
       const url = URL.createObjectURL(file);
       setVideoFile({ file, previewUrl: url });
@@ -35,28 +35,53 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!urlInput.trim()) return;
 
-    // Check for YouTube URLs to manage expectations regarding CORS
-    if (urlInput.includes('youtube.com') || urlInput.includes('youtu.be')) {
-        setError("Note: Direct YouTube links are restricted by browser security (CORS). Please use a direct link to an .mp4/.webm file, or upload a file.");
-        // We continue anyway in case the user has a proxy or it's a direct stream link masked as YT
-    }
-
     setIsDownloading(true);
     setError(null);
+    setDownloadStatus('Initializing...');
 
     try {
-        const response = await fetch(urlInput);
-        if (!response.ok) {
-            throw new Error(`Failed to download video: ${response.status} ${response.statusText}`);
+        let fetchUrl = urlInput;
+        const isYT = isYoutubeUrl(urlInput);
+
+        // 1. Resolve YouTube URL if necessary
+        if (isYT) {
+            setDownloadStatus('Resolving YouTube stream (via Cobalt)...');
+            fetchUrl = await resolveYoutubeUrl(urlInput);
+        }
+
+        // 2. Fetch the video data (using Proxy for CORS if needed)
+        setDownloadStatus(isYT ? 'Downloading video data (via Proxy)...' : 'Downloading video...');
+        
+        // Use a CORS proxy for YouTube streams or if the direct fetch fails
+        // Note: Using corsproxy.io for demo purposes
+        const proxyUrl = isYT 
+            ? `https://corsproxy.io/?${encodeURIComponent(fetchUrl)}` 
+            : fetchUrl;
+
+        let response;
+        try {
+            response = await fetch(proxyUrl);
+        } catch (fetchErr) {
+            // If direct fetch fails (and not YT), try proxy as fallback
+            if (!isYT) {
+                setDownloadStatus('Direct fetch failed, trying proxy...');
+                response = await fetch(`https://corsproxy.io/?${encodeURIComponent(fetchUrl)}`);
+            } else {
+                throw fetchErr;
+            }
+        }
+
+        if (!response || !response.ok) {
+            throw new Error(`Failed to download video: ${response?.status || 'Network Error'}`);
         }
         
         const blob = await response.blob();
-        if (blob.size > 25 * 1024 * 1024) {
-             throw new Error("Video file size exceeds 25MB limit for this browser-based demo.");
-        }
+        
+        // Removed explicit 25MB check here. 
+        // We will let the Gemini Service handle large files via the Files API.
 
         // Create a File object from the blob
-        const fileName = urlInput.split('/').pop()?.split('?')[0] || 'video.mp4';
+        const fileName = isYT ? 'youtube_video.mp4' : (urlInput.split('/').pop()?.split('?')[0] || 'video.mp4');
         const file = new File([blob], fileName, { type: blob.type || 'video/mp4' });
         const url = URL.createObjectURL(file);
         
@@ -65,9 +90,10 @@ const App: React.FC = () => {
         setAnalysisResult(null);
     } catch (err: any) {
         console.error(err);
-        setError(err.message || "Could not download video. Ensure the URL supports CORS (Direct link required).");
+        setError(err.message || "Could not download video. Please check the URL.");
     } finally {
         setIsDownloading(false);
+        setDownloadStatus('');
     }
   };
 
@@ -79,16 +105,20 @@ const App: React.FC = () => {
     setError(null);
     setUrlInput('');
     setIsDownloading(false);
+    setProgressMessage('');
   };
 
   const startAnalysis = async () => {
     if (!videoFile) return;
 
     setAnalysisStatus(AnalysisStatus.ANALYZING);
+    setProgressMessage("Starting analysis...");
     setError(null);
 
     try {
-      const result = await analyzeVideoContent(videoFile.file);
+      const result = await analyzeVideoContent(videoFile.file, (status) => {
+          setProgressMessage(status);
+      });
       setAnalysisResult(result);
       setAnalysisStatus(AnalysisStatus.COMPLETED);
     } catch (err: any) {
@@ -138,8 +168,8 @@ const App: React.FC = () => {
                   onClick={() => setActiveTab('url')}
                   className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'url' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-white'}`}
                 >
-                  <LinkIcon className="w-4 h-4" />
-                  Video URL
+                  <YoutubeIcon className="w-4 h-4" />
+                  YouTube / URL
                 </button>
              </div>
 
@@ -157,7 +187,7 @@ const App: React.FC = () => {
                     </div>
                     <div>
                         <p className="text-xl font-medium text-gray-200">Drop your video here</p>
-                        <p className="text-sm text-gray-500 mt-1">MP4, WEBM, MOV (Max 25MB)</p>
+                        <p className="text-sm text-gray-500 mt-1">MP4, WEBM, MOV (No Size Limit)</p>
                     </div>
                     </div>
                 </div>
@@ -168,19 +198,19 @@ const App: React.FC = () => {
                         <label className="text-sm font-medium text-gray-300 ml-1">Paste Video Link</label>
                         <div className="relative group">
                             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                                <YoutubeIcon className="h-5 w-5 text-gray-500 group-focus-within:text-red-500 transition-colors" />
+                                <YoutubeIcon className={`h-5 w-5 ${isYoutubeUrl(urlInput) ? 'text-red-500' : 'text-gray-500'} transition-colors`} />
                             </div>
                             <input
                                 type="url"
                                 value={urlInput}
                                 onChange={(e) => setUrlInput(e.target.value)}
-                                placeholder="https://example.com/video.mp4"
+                                placeholder="https://youtube.com/watch?v=... or .mp4 link"
                                 className="block w-full pl-12 pr-4 py-4 bg-gray-900 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                                 required
                             />
                         </div>
                         <p className="text-xs text-gray-500 ml-1">
-                           Supports direct links to .mp4, .webm. <span className="text-gray-600">(Note: YouTube links may be blocked by CORS)</span>
+                           Supports direct files and YouTube links. Large videos are automatically chunked.
                         </p>
                       </div>
                       
@@ -190,16 +220,16 @@ const App: React.FC = () => {
                         className={`w-full py-4 rounded-xl font-semibold text-white transition-all transform flex items-center justify-center gap-2 ${
                             isDownloading 
                             ? 'bg-gray-700 cursor-wait' 
-                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 hover:scale-[1.02] shadow-lg'
+                            : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 hover:scale-[1.02] shadow-lg'
                         }`}
                       >
                         {isDownloading ? (
                             <>
                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                Downloading...
+                                {downloadStatus || 'Processing...'}
                             </>
                         ) : (
-                            <>Download & Ready Player</>
+                            <>Load Video</>
                         )}
                       </button>
                    </form>
@@ -247,6 +277,13 @@ const App: React.FC = () => {
                          <BrainCircuitIcon className="w-5 h-5 mr-2" />
                          Analyze & Detect "Fluff"
                     </button>
+                </div>
+            )}
+            
+            {analysisStatus === AnalysisStatus.ANALYZING && (
+                <div className="flex flex-col items-center justify-center mt-6 p-4 rounded-lg bg-gray-800/30">
+                    <div className="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-3"></div>
+                    <p className="text-blue-300 text-sm font-medium animate-pulse">{progressMessage || "Analyzing..."}</p>
                 </div>
             )}
 

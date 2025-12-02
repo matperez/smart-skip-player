@@ -27,11 +27,58 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   });
 };
 
-export const analyzeVideoContent = async (file: File): Promise<AnalysisResult> => {
+export const analyzeVideoContent = async (file: File, onProgress?: (status: string) => void): Promise<AnalysisResult> => {
   const ai = getClient();
   const model = "gemini-2.5-flash"; // Efficient for longer context processing
 
-  const videoPart = await fileToGenerativePart(file);
+  let contentPart;
+
+  // For files larger than 20MB, we must use the Files API (Media Upload)
+  // This handles the "upload by parts" logic internally and bypasses inline payload limits.
+  if (file.size > 20 * 1024 * 1024) {
+      if (onProgress) onProgress("Uploading large video to Gemini (this bypasses size limits)...");
+      
+      try {
+        // Upload the file using the Files API
+        const uploadResult = await ai.files.upload({
+            file: file,
+            config: { displayName: file.name }
+        });
+
+        let fileUri = uploadResult.uri;
+        let state = uploadResult.state;
+        const name = uploadResult.name;
+
+        // Wait for the file to be processed and active
+        while (state === "PROCESSING") {
+            if (onProgress) onProgress("Processing video on server...");
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const fileStatus = await ai.files.get({ name });
+            state = fileStatus.state;
+        }
+
+        if (state !== "ACTIVE") {
+            throw new Error(`Video processing failed on server. State: ${state}`);
+        }
+
+        // Use the file URI for content generation
+        contentPart = {
+            fileData: {
+                fileUri: fileUri,
+                mimeType: uploadResult.mimeType
+            }
+        };
+      } catch (error: any) {
+          console.error("Large file upload failed:", error);
+          throw new Error("Failed to upload large video. " + (error.message || "Unknown error"));
+      }
+  } else {
+      // For smaller files, inline data is faster
+      if (onProgress) onProgress("Encoding video data...");
+      contentPart = await fileToGenerativePart(file);
+  }
+
+  if (onProgress) onProgress("Analyzing content for fluff and silence...");
 
   const prompt = `
     Analyze the audio and visual content of this video. 
@@ -52,7 +99,7 @@ export const analyzeVideoContent = async (file: File): Promise<AnalysisResult> =
     const response = await ai.models.generateContent({
       model: model,
       contents: {
-        parts: [videoPart, { text: prompt }]
+        parts: [contentPart, { text: prompt }]
       },
       config: {
         responseMimeType: "application/json",
